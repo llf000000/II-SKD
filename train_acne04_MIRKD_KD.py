@@ -48,12 +48,12 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=32, help='batch_size')
     parser.add_argument('--batch-size-test', type=int, default=32, help='batch_size_test') 
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate')  
-    parser.add_argument('--num-workers', type=int, default=32, help='number of workers for dataloader')
+    parser.add_argument('--num-workers', type=int, default=4, help='number of workers for dataloader')
     parser.add_argument('--num-classes', type=int, default=4, help='num_classes')  
     parser.add_argument('--current-time',  type=str, default=current_time, help='current_time')                                                                
     parser.add_argument('--data-path', type=str, default='/root/workspace/dataset/acne04/JPEGImages', help='dataset path')
-    parser.add_argument('--cross-val-lists', nargs='+', default=['0', '1', '2'], help='每个字符串代表一个交叉验证的索引或标识符。') # ['0', '1', '2', '3', '4']
-    parser.add_argument('--device', default='cuda:2', help='device id (i.e. 0 or 0,1 or cpu)')
+    parser.add_argument('--cross-val-lists', nargs='+', default=['2'], help='每个字符串代表一个交叉验证的索引或标识符。') # ['0', '1', '2', '3', '4']
+    parser.add_argument('--device', default='cuda:0', help='device id (i.e. 0 or 0,1 or cpu)')
     parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
     parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet34', help='model architecture: ')
@@ -72,7 +72,7 @@ def parse_args():
     parser.add_argument('--squared', default=False, type=bool, help='Flag to indicate squaring operation')
     parser.add_argument('--ce_loss_weight', default=1., type=float)
     parser.add_argument('--mirkd_loss_weight', default=1., type=float)
-    parser.add_argument('--kd_loss_weight', default=0., type=float)
+    parser.add_argument('--kd_loss_weight', default=1., type=float)
     parser.add_argument('--temperature', default=4, type=int)
     parser.add_argument('--teacher_weight_root', default="/root/workspace/baseline_Medical/baseline_ACNE04/checkpoint/pair/densenet121/teacher/", type=str)
     parser.add_argument("--download_size", default=224,type=int,help='img_size')
@@ -107,35 +107,45 @@ def _pdist(e, squared, eps):
 
 
 def rkd_loss(f_s, f_t, squared=False, eps=1e-12, distance_weight=25, angle_weight=50):
-    stu = f_s.view(f_s.shape[0], -1)
-    tea = f_t.view(f_t.shape[0], -1)
+    # f_s, f_t: [B, N, C]
+    B, N, C = f_s.shape
 
-    # RKD distance loss
+    # 距离损失
     with torch.no_grad():
-        t_d = _pdist(tea, squared, eps)
-        mean_td = t_d[t_d > 0].mean()
-        t_d = t_d / mean_td
+        t_d = torch.cdist(f_t.contiguous(), f_t.contiguous(), p=2 if not squared else 1)
+        mask = t_d > 0
+        sum_td = (t_d * mask).sum(dim=(1,2))
+        count_td = mask.sum(dim=(1,2))
+        mean_td = sum_td / (count_td + eps)
+        mean_td = mean_td.view(-1, 1, 1)
+        t_d = t_d / (mean_td + eps)
 
-    d = _pdist(stu, squared, eps)
-    mean_d = d[d > 0].mean()
-    d = d / mean_d
+    d = torch.cdist(f_s.contiguous(), f_s.contiguous(), p=2 if not squared else 1)
+    mask = d > 0
+    sum_d = (d * mask).sum(dim=(1,2))
+    count_d = mask.sum(dim=(1,2))
+    mean_d = sum_d / (count_d + eps)
+    mean_d = mean_d.view(-1, 1, 1)
+    d = d / (mean_d + eps)
 
-    loss_d = F.smooth_l1_loss(d, t_d)
+    loss_d = F.smooth_l1_loss(d, t_d, reduction='none')  # [B, N, N]
+    loss_d = loss_d.mean(dim=(1,2))  # [B]
 
-    # RKD Angle loss
+    # 角度损失
     with torch.no_grad():
-        td = tea.unsqueeze(0) - tea.unsqueeze(1)
-        norm_td = F.normalize(td, p=2, dim=2)
-        t_angle = torch.bmm(norm_td, norm_td.transpose(1, 2)).view(-1)
+        td = f_t.unsqueeze(2) - f_t.unsqueeze(1)  # [B, N, N, C]
+        norm_td = F.normalize(td, p=2, dim=3)
+        t_angle = torch.matmul(norm_td, norm_td.transpose(2, 3)).view(B, -1)  # [B, N*N]
 
-    sd = stu.unsqueeze(0) - stu.unsqueeze(1)
-    norm_sd = F.normalize(sd, p=2, dim=2)
-    s_angle = torch.bmm(norm_sd, norm_sd.transpose(1, 2)).view(-1)
+    sd = f_s.unsqueeze(2) - f_s.unsqueeze(1)  # [B, N, N, C]
+    norm_sd = F.normalize(sd, p=2, dim=3)
+    s_angle = torch.matmul(norm_sd, norm_sd.transpose(2, 3)).view(B, -1)  # [B, N*N]
 
-    loss_a = F.smooth_l1_loss(s_angle, t_angle)
+    loss_a = F.smooth_l1_loss(s_angle, t_angle, reduction='none')  # [B, N*N]
+    loss_a = loss_a.mean(dim=1)  # [B]
 
-    loss = distance_weight * loss_d + angle_weight * loss_a
-    return loss
+    loss = distance_weight * loss_d + angle_weight * loss_a  # [B]
+    return loss  # 返回每个样本的loss
 
 def kd_loss(logits_student, logits_teacher, temperature):
     log_pred_student = F.log_softmax(logits_student / temperature, dim=1)
@@ -145,18 +155,14 @@ def kd_loss(logits_student, logits_teacher, temperature):
     return loss_kd
 
 def multi_rkd_per_sample(out_s_multi, out_t_multi, distance_weight=25, angle_weight=50):
-    # 转换形状，每个样本的21个区域 (B x C x 21)
-    # out_s_multi = out_s_multi.permute(2, 0, 1)  # (21 x B x C)
-    # out_t_multi = out_t_multi.permute(2, 0, 1)  # (21 x B x C)
-
-    # 将21个区域视为批次进行RKD损失计算
+    # out_s_multi, out_t_multi: [B, N, C]
     loss = rkd_loss(
         out_s_multi, out_t_multi,
         squared=False, eps=1e-12,
         distance_weight=distance_weight,
         angle_weight=angle_weight
     )
-    return loss  # 返回每个样本的RKD损失
+    return loss  # [B]
 
 accuracy_total = 0
 
@@ -267,16 +273,12 @@ def main(cross_val_index,args):
 
             # 遍历每个样本，计算其21个区域的RKD损失
             batch_loss_kd = 0
-            for i in range(images.size(0)):  # images.size(0)是批次大小
-
-                sample_loss_kd = multi_rkd_per_sample(
-                    patch_s[i], patch_t[i],
-                    distance_weight=args.distance_weight,
-                    angle_weight=args.angle_weight
-                )
-                batch_loss_kd += sample_loss_kd  # 累加每个样本的损失
-                
-            rkd_loss = batch_loss_kd / images.size(0)
+            losses = multi_rkd_per_sample(
+                patch_s, patch_t,
+                distance_weight=args.distance_weight,
+                angle_weight=args.angle_weight
+            )  # [B]
+            rkd_loss = losses.mean()
             # 计算整个批次的平均RKD损失
             loss = args.mirkd_loss_weight*rkd_loss + args.kd_loss_weight*loss_kd + args.ce_loss_weight* loss_ce
             
