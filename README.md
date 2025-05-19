@@ -13,9 +13,9 @@ Official code for the paper nemed Multiscale Intra-Relational Knowledge Distilla
 ## Training on ACNE04：
 - Fetch the pretrained teacher models by:
 ```
-python train_acne04_teacher_Densenet121.py
+python train_teacher.py
 ```
 - Train student models by::
 ```
-python train_acne04_MIRKD_KD.py
+python train_student_mirkd_kd.py
 ```
