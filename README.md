@@ -3,7 +3,7 @@ Official code for the paper nemed Multiscale Intra-Relational Knowledge Distilla
 
 # Introduction
 ## Framework
-![Framework](./picture/overall.png)
+![Framework](./picture/comparison.jpg)
 ## Installation
 
 - Python 3.8  
