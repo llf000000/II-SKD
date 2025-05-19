@@ -1,5 +1,5 @@
 # MIRKD
-Official code for the paper nemed Multiscale Intra-Relational Knowledge Distillation for Acne Grading
+Official code for the paper nemed Multiscale Intra-Relational Knowledge Distillation for Acne Severity Classification
 
 # Introduction
 ## Framework
