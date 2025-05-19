@@ -16,7 +16,7 @@ Official code for the paper nemed Multiscale Intra-Relational Knowledge Distilla
 ```
 python train_teacher.py
 ```
-- Train student models by::
+- Train student models by:
 ```
 python train_student_mirkd_kd.py
 ```
