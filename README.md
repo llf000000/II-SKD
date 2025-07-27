@@ -1,4 +1,4 @@
-# MIRKD
+# II-SKD
 Official code for the paper nemed Multiscale Intra-Relational Knowledge Distillation for Acne Severity Classification
 
 # Introduction
